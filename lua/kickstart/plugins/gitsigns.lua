@@ -60,4 +60,17 @@ return {
       map({ 'o', 'x' }, 'ih', gitsigns.select_hunk)
     end,
   },
+  {
+    'tpope/vim-fugitive',
+    lazy = false,
+    keys = {
+      { '<leader>gs', '<cmd>topleft vert Git<CR>', desc = 'Open [G]it [S]tatus' },
+      { '<leader>gd', '<cmd>Gvdiffsplit!<CR>', desc = 'Open [G]it [D]iff' },
+      { '<leader>gy', ':GBrowse!<CR>', mode = { 'n', 'v' }, desc = '[Y]ank [G]it URL' },
+    },
+
+    dependencies = {
+      'tpope/vim-rhubarb',
+    },
+  },
 }
