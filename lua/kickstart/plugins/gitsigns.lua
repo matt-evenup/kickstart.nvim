@@ -67,6 +67,7 @@ return {
       { '<leader>gs', '<cmd>topleft vert Git<CR>', desc = 'Open [G]it [S]tatus' },
       { '<leader>gd', '<cmd>Gvdiffsplit!<CR>', desc = 'Open [G]it [D]iff' },
       { '<leader>gy', ':GBrowse!<CR>', mode = { 'n', 'v' }, desc = '[Y]ank [G]it URL' },
+      { '<leader>gb', '<cmd>Git blame<CR>', desc = '[G]it [B]lame' },
     },
 
     dependencies = {

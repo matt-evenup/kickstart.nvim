@@ -61,6 +61,9 @@ return {
       },
     }
 
+    -- TODO: This needs to change dependong on what's available in the environment
+    require('dap-python').setup '.direnv/python-3.11/bin/python'
+
     -- Dap UI setup
     -- For more information, see |:help nvim-dap-ui|
     ---@diagnostic disable-next-line: missing-fields

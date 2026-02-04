@@ -30,6 +30,9 @@ vim.o.showmode = false
 --  See `:help 'clipboard'`
 vim.schedule(function() vim.o.clipboard = 'unnamedplus' end)
 
+-- the -uu option often includes a lot of noise, we can still add the option if we need when running :grep
+vim.o.grepprg = 'rg --vimgrep'
+
 -- Enable break indent
 vim.o.breakindent = true
 
@@ -136,6 +139,22 @@ vim.api.nvim_create_autocmd('TextYankPost', {
   group = vim.api.nvim_create_augroup('kickstart-highlight-yank', { clear = true }),
   callback = function()
     vim.hl.on_yank { timeout = 1000 }
+  end,
+})
+
+vim.api.nvim_create_autocmd('BufReadPost', {
+  callback = function()
+    local exclude = { 'gitcommit', 'gitrebase' }
+    local buf_ft = vim.bo.filetype
+    if vim.tbl_contains(exclude, buf_ft) then
+      return
+    end
+
+    local mark = vim.api.nvim_buf_get_mark(0, '"')
+    local lcount = vim.api.nvim_buf_line_count(0)
+    if mark[1] > 0 and mark[1] <= lcount then
+      pcall(vim.api.nvim_win_set_cursor, 0, mark)
+    end
   end,
 })
 
@@ -291,7 +310,12 @@ require('lazy').setup({
         defaults = require('telescope.themes').get_ivy(),
         -- pickers = {}
         extensions = {
-          ['ui-select'] = { require('telescope.themes').get_dropdown() },
+          ['ui-select'] = {
+            require('telescope.themes').get_dropdown(),
+          },
+          ['gh'] = {
+            require('telescope.themes').get_dropdown(),
+          },
         },
       }
 
@@ -512,7 +536,14 @@ require('lazy').setup({
         -- pyright = { enabled = false },
         basedpyright = {},
         shellcheck = {},
-        ruff = {},
+        ruff = {
+          capabilities = {
+            textDocument = {
+              definition = false,
+              implementation = false,
+            },
+          },
+        },
         -- rust_analyzer = {},
         --
         -- Some languages (like typescript) have entire language plugins that can be useful:
@@ -567,10 +598,35 @@ require('lazy').setup({
       local mti = require 'mason-tool-installer'
       mti.setup { ensure_installed = ensure_installed }
 
-      for name, server in pairs(servers) do
-        vim.lsp.config(name, server)
-        vim.lsp.enable(name)
-      end
+      require('mason-lspconfig').setup {
+        ensure_installed = {}, -- explicitly set to an empty table (Kickstart populates installs via mason-tool-installer)
+        automatic_installation = false,
+        handlers = {
+          function(server_name)
+            local server = servers[server_name] or {}
+            -- This handles overriding only values explicitly passed
+            -- by the server configuration above. Useful when disabling
+            -- certain features of an LSP (for example, turning off formatting for ts_ls)
+            -- @type: lsp.ServerCapabilities
+            local server_capabilities = vim.tbl_deep_extend('force', {}, capabilities, server.capabilities or {})
+            if server_name == 'ruff' then
+              -- Disable all navigation capabilities for ruff, keep only diagnostics and formatting
+              server_capabilities.hoverProvider = false
+              server_capabilities.definitionProvider = false
+              server_capabilities.referencesProvider = false
+              server_capabilities.declarationProvider = false
+              server_capabilities.typeDefinitionProvider = false
+              server_capabilities.implementationProvider = false
+              server_capabilities.renameProvider = false
+              server_capabilities.documentSymbolProvider = false
+              server_capabilities.workspaceSymbolProvider = false
+              server_capabilities.completionProvider = false
+            end
+            server.capabilities = server_capabilities
+            require('lspconfig')[server_name].setup(server)
+          end,
+        },
+      }
     end,
   },
 
@@ -607,10 +663,12 @@ require('lazy').setup({
       formatters_by_ft = {
         lua = { 'stylua' },
         -- Conform can also run multiple formatters sequentially
-        python = { 'isort', 'black' },
-        --
-        -- You can use 'stop_after_first' to run the first available formatter from the list
-        -- javascript = { "prettierd", "prettier", stop_after_first = true },
+        python = { 'ruff_format', 'ruff_fix', 'ruff_organize_imports' },
+        -- Use the "*" filetype to run formatters on all filetypes.
+        ['*'] = { 'codespell' },
+      },
+      default_format_opts = {
+        lsp_format = 'fallback',
       },
     },
   },
@@ -719,7 +777,14 @@ require('lazy').setup({
       signature = { enabled = true },
     },
   },
-
+  -- lua/plugins/rose-pine.lua
+  -- {
+  --   "rose-pine/neovim",
+  --   name = "rose-pine",
+  --   config = function()
+  --     vim.cmd("colorscheme rose-pine")
+  --   end
+  -- },
   { -- You can easily change to a different colorscheme.
     -- Change the name of the colorscheme plugin below, and then
     -- change the command in the config to whatever the name of that colorscheme is.
@@ -798,7 +863,7 @@ require('lazy').setup({
       require('mini.ai').setup { n_lines = 500 }
       require('mini.surround').setup()
       require('mini.comment').setup()
-      require('mini.align').setup()
+      -- require('mini.align').setup()
 
       local statusline = require 'mini.statusline'
       statusline.setup { use_icons = vim.g.have_nerd_font }
@@ -951,12 +1016,46 @@ require('lazy').setup({
       { '<leader>ts', '<cmd>lua require("neotest").summary.toggle()<CR>', desc = 'Open [T]est [S]ummary Panel' },
     },
     config = function()
+      -- Cache environment variables during config to avoid fast event context issues
+      local cached_django_settings = vim.env.DJANGO_SETTINGS_MODULE
+      local cached_venv = vim.env.VIRTUAL_ENV
+
       require('neotest').setup {
         adapters = {
-          require 'neotest-python',
+          require 'neotest-python' {
+            runner = function()
+              if cached_django_settings then
+                return 'django'
+              else
+                return 'pytest'
+              end
+            end,
+            args = function()
+              if cached_django_settings then
+                return { '--keepdb' }
+              else
+                return {}
+              end
+            end,
+            dap = { justMyCode = false },
+            python = function()
+              if cached_venv then
+                return cached_venv .. '/bin/python'
+              end
+              return vim.fn.exepath 'python3' or vim.fn.exepath 'python' or 'python'
+            end,
+          },
         },
       }
     end,
+  },
+  {
+    'andythigpen/nvim-coverage',
+    version = '*',
+    lazy = false,
+    opts = {
+      auto_reload = true,
+    },
   },
   {
     'tpope/vim-dadbod',
@@ -983,6 +1082,15 @@ require('lazy').setup({
     'coder/claudecode.nvim',
     dependencies = { 'folke/snacks.nvim' },
     config = true,
+    opts = {
+      terminal = {
+        snacks_win_opts = {
+          width = 0.5,
+          height = 0.5,
+        },
+      },
+    },
+
     keys = {
       { '<leader>a', nil, desc = 'AI/Claude Code' },
       { '<leader>ac', '<cmd>ClaudeCode<cr>', desc = 'Toggle Claude' },
@@ -1001,6 +1109,82 @@ require('lazy').setup({
       -- Diff management
       { '<leader>aa', '<cmd>ClaudeCodeDiffAccept<cr>', desc = 'Accept diff' },
       { '<leader>ad', '<cmd>ClaudeCodeDiffDeny<cr>', desc = 'Deny diff' },
+    },
+  },
+
+  {
+    'Vigemus/iron.nvim',
+    cmd = {
+      'IronRepl',
+      'IronReplHere',
+      'IronRestart',
+      'IronSend',
+      'IronFocus',
+      'IronHide',
+      'IronWatch',
+      'IronAttach',
+    },
+    keys = {
+      '<space>sc',
+      '<space>sc',
+      '<space>sf',
+      '<space>sl',
+      '<space>su',
+      '<space>sm',
+      '<space>mc',
+      '<space>mc',
+      '<space>md',
+      '<space>s<cr>',
+      '<space>s<space>',
+      '<space>sq',
+      '<space>cl',
+
+      { '<space>rs', '<cmd>IronRepl<cr>' },
+      { '<space>rr', '<cmd>IronRestart<cr>' },
+      { '<space>rf', '<cmd>IronFocus<cr>' },
+      { '<space>rh', '<cmd>IronHide<cr>' },
+    },
+    main = 'iron.core', -- <== This informs lazy.nvim to use the entrypoint of `iron.core` to load the configuration.
+    opts = {
+      config = {
+        -- Whether a repl should be discarded or not
+        scratch_repl = true,
+        -- Your repl definitions come here
+        repl_definition = {
+          sh = {
+            -- Can be a table or a function that
+            -- returns a table (see below)
+            command = { 'zsh' },
+          },
+          python = {
+            command = { 'ipython', '--no-autoindent' },
+          },
+        },
+        -- How the repl window will be displayed
+        -- See below for more information
+        repl_open_cmd = 'belowright 15 split',
+      },
+      -- Iron doesn't set keymaps by default anymore.
+      -- You can set them here or manually add keymaps to the functions in iron.core
+      keymaps = {
+        send_motion = '<space>sc',
+        visual_send = '<space>sc',
+        send_file = '<space>sf',
+        send_line = '<space>sl',
+        send_until_cursor = '<space>su',
+        send_mark = '<space>sm',
+        mark_motion = '<space>mc',
+        mark_visual = '<space>mc',
+        remove_mark = '<space>md',
+        cr = '<space>s<cr>',
+        interrupt = '<space>s<space>',
+        exit = '<space>sq',
+        clear = '<space>cl',
+      },
+      -- If the highlight is on, you can change how it looks
+      -- For the available options, check nvim_set_hl
+      highlight = { italic = true },
+      ignore_blank_lines = true, -- ignore blank lines when sending visual select lines
     },
   },
 
@@ -1035,6 +1219,66 @@ require('lazy').setup({
     },
   },
 })
+
+-- Function to parse stack trace from clipboard using errorformat
+local function stacktrace_to_quickfix()
+  local clipboard = vim.fn.getreg '+'
+
+  if clipboard == '' then
+    print 'Clipboard is empty'
+    return
+  end
+
+  -- Write clipboard to temporary file
+  local tmpfile = vim.fn.tempname()
+  local f = io.open(tmpfile, 'w')
+  if not f then
+    print 'Failed to create temporary file'
+    return
+  end
+  f:write(clipboard)
+  f:close()
+
+  -- Save current errorformat
+  local old_efm = vim.o.errorformat
+
+  -- Set errorformat for common stack trace formats
+  vim.o.errorformat = table.concat({
+    '%+GTraceback%.%#', -- Ignore Python traceback header
+    '%A  File "%f"\\, line %l\\, in %m', -- Start: Python file with function
+    '%A  File "%f"\\, line %l', -- Start: Python file without function
+    '%C    %#%m', -- Continue: indented code line
+    '%Z    %#%p%^', -- End: indented caret pointer
+    '%f:%l:%c: %m', -- Standard: file:line:col: message
+    '%f:%l: %m', -- Standard: file:line: message
+    '%f(%l): %m', -- MSVC style
+    '%f:%l', -- Just file:line
+    '%C%p%^', -- Continue: caret pointer (general)
+    '%I%m', -- Include everything else as info
+  }, ',')
+
+  -- Load the file into quickfix
+  vim.cmd('cfile ' .. vim.fn.fnameescape(tmpfile))
+
+  -- Restore errorformat
+  vim.o.errorformat = old_efm
+
+  -- Open quickfix window
+  local qf_list = vim.fn.getqflist()
+  if #qf_list > 0 then
+    vim.cmd 'copen'
+    print('Loaded ' .. #qf_list .. ' items into quickfix list')
+  else
+    print 'No stack trace entries found in clipboard'
+  end
+
+  -- Clean up temp file
+  os.remove(tmpfile)
+end
+
+-- Create command and keymap
+vim.api.nvim_create_user_command('StacktraceToQf', stacktrace_to_quickfix, { desc = 'Parse stack trace from clipboard to quickfix' })
+vim.keymap.set('n', '<leader>q', stacktrace_to_quickfix, { desc = 'Load stack trace from clipboard to [Q]uickfix' })
 
 -- The line beneath this is called `modeline`. See `:help modeline`
 -- vim: ts=2 sts=2 sw=2 et
