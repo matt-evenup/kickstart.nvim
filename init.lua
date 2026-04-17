@@ -537,6 +537,7 @@ require('lazy').setup({
         basedpyright = {},
         shellcheck = {},
         ruff = {
+          root_dir = require('lspconfig.util').root_pattern('pyproject.toml', 'ruff.toml', '.ruff.toml', 'setup.py', 'setup.cfg', '.git'),
           capabilities = {
             textDocument = {
               definition = false,
@@ -663,9 +664,53 @@ require('lazy').setup({
       formatters_by_ft = {
         lua = { 'stylua' },
         -- Conform can also run multiple formatters sequentially
-        python = { 'ruff_format', 'ruff_fix', 'ruff_organize_imports' },
+        python = { 'ruff_organize_imports', 'ruff_fix', 'ruff_format' },
         -- Use the "*" filetype to run formatters on all filetypes.
         ['*'] = { 'codespell' },
+      },
+      formatters = {
+        -- Configure ruff_fix to respect unfixable rules from pyproject.toml
+        ruff_fix = {
+          command = (function()
+            local ruff_cache = {}
+            return function()
+              local cwd = vim.fn.getcwd()
+
+              -- Return cached path if available
+              if ruff_cache[cwd] then
+                return ruff_cache[cwd]
+              end
+
+              local venv_paths = {
+                cwd .. '/.venv/bin/ruff',
+                vim.env.VIRTUAL_ENV and vim.env.VIRTUAL_ENV .. '/bin/ruff',
+              }
+
+              -- Check for Poetry environment first
+              local ok, result = pcall(function()
+                return vim.system({ 'poetry', 'env', 'info', '--path' }, { text = true }):wait()
+              end)
+
+              if ok and result.code == 0 then
+                local poetry_env = vim.trim(result.stdout)
+                table.insert(venv_paths, 1, poetry_env .. '/bin/ruff')
+              end
+
+              -- Check for virtual environment
+              for _, path in ipairs(venv_paths) do
+                if vim.fn.executable(path) == 1 then
+                  ruff_cache[cwd] = path
+                  return path
+                end
+              end
+
+              -- Fall back to system ruff
+              ruff_cache[cwd] = 'ruff'
+              return 'ruff'
+            end
+          end)(),
+          -- args = { 'check', '--fix', '--force-exclude', '--stdin-filename', '$FILENAME', '-' },
+        },
       },
       default_format_opts = {
         lsp_format = 'fallback',
@@ -930,14 +975,18 @@ require('lazy').setup({
             ['ic'] = '@class.inner',
             ['ia'] = '@parameter.inner',
             ['aa'] = '@parameter.outer',
+            ['al'] = '@loop.outer',
+            ['il'] = '@loop.inner',
           },
           selection_modes = {
             ['@parameter.outer'] = 'v',
             ['@parameter.inner'] = 'v',
             ['@function.inner'] = 'V',
-            ['@function.outer'] = 'v',
+            ['@function.outer'] = 'V',
             ['@class.inner'] = 'V',
-            ['@class.outer'] = 'v',
+            ['@class.outer'] = 'V',
+            ['@loop.inner'] = 'V',
+            ['@loop.outer'] = 'V',
           },
           -- If you set this to `true` (default is `false`) then any textobject is
           -- extended to include preceding or succeeding whitespace. Succeeding
